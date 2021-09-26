@@ -9,6 +9,7 @@ import sys
 import argparse
 
 global CNT
+global RANK
 CNT = 0
 
 
@@ -91,7 +92,6 @@ def rho_from_labels(faces, parent, Lp, lattice, labels, fd):
     # if no, then check that it's "in ker(fd)
     C = lattice.C
     map = {'ADD': '>', 'INV': '=', 'SUB': '<'}
-    origin = BasicSet.from_point(Point.zero(Lp.project_out_all_params().get_space()))
 
     bset = Lp
     # must be in ker(fd)
@@ -106,13 +106,13 @@ def rho_from_labels(faces, parent, Lp, lattice, labels, fd):
         next_bset = mat_to_set(C[np.array(list(face-parent)),:lattice.num_indices], lattice, map[label])
         bset = bset.intersect(next_bset)
 
-        if (bset - origin).is_empty():
+        if (bset - lattice.origin).is_empty():
             break
         else:
             satsified_faces.append(face)
 
     if len(satsified_faces) == len(faces):
-        feasible_rho = bset - origin
+        feasible_rho = bset - lattice.origin
         return feasible_rho.sample_point(), satsified_faces, None
 
     #
@@ -206,10 +206,8 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
     pprint(header)
     pprint('-' * len(str(header)))
     for labels in enumerate_labels(candidate_facets, legal_labels):
-        if labels == ['INV', 'INV', 'INV']:
-            x = 0
         rho, satisfied_facets, problem_facet = rho_from_labels(candidate_facets, node, Lp, lattice, labels, fd)
-        if rho:
+        if rho and not rho.is_void():
             label_combos.append(labels + [rho])
             pprint('{}  possible -> rho = {}'.format(labels, rho))
         else:
@@ -316,25 +314,51 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
                 successful_combos.append(
                     Success(Action.DECOMPOSITION, node, fp_str, fp_decomp=fp1_str, children=[ret],
                             iss_parent_nodes=iss_parent_nodes.copy()))
+                break
     else:
         pprint("decomposition not feasible for fp = {}".format(fp_str))
     pprint()
+
+    if len(successful_combos) > 0:
+        return successful_combos
 
     pprint('STEP D - index set splitting')
     pprint()
 
     node_bset = lattice.create_facet_bset(node)
-    current_rank = lattice.compute_rank(node_bset)
+    current_rank = lattice.compute_rank(lattice.bset)
 
     for f in [fp, fd]:
         ker_f = lattice.ker(f)
-        affs = [c.get_aff() for c in ker_f.get_constraints() if c.is_equality()]
+        ker_f_rank = lattice.compute_rank(ker_f)
 
-        # need as many vertices as there are affs
-        for vertices in combinations(lattice.get_vertices_on(node), len(affs)):
+        # in 3D, want to make 2D planes
+        # to make 2D planes, either:
+        # - we already have enough from ker_f (i.e., rank(ker_f) = current_rank - 1)
+        #   in which case we just need to translate to a vertex
+        # - we need additional vertices - to make 2D plane, if rank(ker_f) = 1
+        #   then we need 1 more vertex
+        split_affs = []
 
-            split_aff = lattice.make_hyperplane(ker_f, vertices)
+        if ker_f_rank == RANK - 1:
+            for vertex in lattice.get_vertices_on(node):
+                # translate ker_f to vertex and take its equality constraint as aff
+                trunc_vertex = lattice.truncate_vertex(vertex)
+                m = build_map(ker_f.get_space(), trunc_vertex, None, lattice.num_params, lattice.num_indices)
+                ker_f_at_v0 = ker_f.apply(m)
+                equalities = [c for c in ker_f_at_v0.get_constraints() if c.is_equality()]
+                assert len(equalities) == 1
+                split_aff = equalities[0].get_aff()
+                split_affs.append(split_aff)
+        else:
+            num_vertices_needed = RANK - lattice.compute_rank(ker_f) - 1
+            for vertices in combinations(lattice.get_vertices_on(node), num_vertices_needed):
+                split_aff = lattice.make_hyperplane(RANK - 1, ker_f, vertices)
+                if not split_aff:
+                    continue
+                split_affs.append(split_aff)
 
+        for split_aff in split_affs:
             r_aff = split_aff
             l_aff = r_aff.neg()
             l_aff = l_aff.set_constant_val(l_aff.get_constant_val() - 1)
@@ -346,13 +370,10 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
             either_is_empty = l_cut_bset.is_empty() or r_cut_bset.is_empty()
             either_has_different_rank = l_cut_rank != current_rank or r_cut_rank != current_rank
             if either_is_empty or either_has_different_rank:
-                pprint('cut "{}" on vertices "{}" is invalid'.format(l_aff, vertices))
-                #print('node = BasicSet("{}")'.format(node_bset))
-                #print('L = BasicSet("{}")'.format(l_cut_bset))
-                #print('R = BasicSet("{}")'.format(r_cut_bset))
+                pprint('cut "{}" is invalid'.format(l_aff))
                 continue
 
-            pprint('cut "{}" on vertices "{}" is valid'.format(l_aff, vertices))
+            pprint('cut "{}" is valid'.format(l_aff))
             pprint('node = BasicSet("{}")'.format(node_bset))
             pprint('L = BasicSet("{}")'.format(l_cut_bset))
             pprint('R = BasicSet("{}")'.format(r_cut_bset))
@@ -368,11 +389,6 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
             r_lattice.pretty_print_constraints()
             r_lattice.pretty_print()
             pprint()
-            print('isl-plot-segments')
-            print('s = Set("{}")'.format(lattice.bset))
-            print('l = Set("{}")'.format(l_lattice.bset))
-            print('r = Set("{}")'.format(r_lattice.bset))
-            pprint()
 
             # recurse into each side of the cut, they both must return success for this
             # cut to be valid
@@ -385,25 +401,19 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
                              do_decomp=do_decomp,
                              do_splitting=do_splitting)
 
-            if l_ret and l_ret[0].action != Action.INDEX_SET_SPLIT:
-                pprint('--> L', l_ret[0])
-                [pprint('-->', v.get_expr()) for v in l_lattice.vertex_nodes[0][1]]
-                pprint('-->')
-                pprint('pieces.append(BasicSet("{}"))'.format(l_lattice.bset))
             r_ret = simplify(k=k, fp_str=fp_str, fd_str=fd_str, node=r_lattice.root[0], lattice=r_lattice,
                              legal_labels=legal_labels,
                              iss_parent_nodes=iss_parent_nodes.copy(),
                              do_decomp=do_decomp,
                              do_splitting=do_splitting)
-            if r_ret and r_ret[0].action != Action.INDEX_SET_SPLIT:
-                pprint('--> R', r_ret[0])
-                [pprint('-->', v.get_expr()) for v in r_lattice.vertex_nodes[0][1]]
-                pprint('-->')
-                pprint('pieces.append(BasicSet("{}"))'.format(r_lattice.bset))
+
             if l_ret and r_ret:
                 successful_combos.append(
                     Success(Action.INDEX_SET_SPLIT, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(),
-                            children=[l_ret, r_ret]))
+                            children=[l_ret, r_ret],
+                            notes='at {}'.format(split_aff),
+                            l_cut_bset=l_cut_bset,
+                            r_cut_bset=r_cut_bset))
                 break
         if successful_combos:
             break
@@ -413,7 +423,9 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
 
 class Success:
 
-    def __init__(self, action, node, fp_str, facets=None, labelings=None, iss_parent_nodes=None, splits=None, children=list(), fp_decomp=None, notes=None):
+    def __init__(self, action, node, fp_str, facets=None, labelings=None, iss_parent_nodes=None,
+                 splits=None, children=list(), fp_decomp=None,
+                 notes=None, l_cut_bset=None, r_cut_bset=None):
         self.action = action
         self.node = node
         self.fp_str = fp_str
@@ -423,6 +435,8 @@ class Success:
         self.children = children
         self.fp_decomp = fp_decomp
         self.notes = notes
+        self.l_cut_bset = l_cut_bset
+        self.r_cut_bset = r_cut_bset
 
     def __str__(self):
         if not self.iss_parent_nodes:
@@ -439,6 +453,13 @@ class Success:
         ret = '{} {}'.format(ret, self.notes if self.notes else '')
         return ret
 
+    def get_splits(self):
+        if self.action == Action.INDEX_SET_SPLIT:
+            yield self.l_cut_bset, self.r_cut_bset
+        for split in self.children:
+            for child_success in split:
+                return child_success.get_splits()
+
 
 class Action(Enum):
     INDEX_SET_SPLIT = 1
@@ -454,6 +475,10 @@ def start(op, fp, s, fd, k):
         legal_labels.append('SUB')
 
     lattice = FaceLattice(s)
+
+    global RANK
+    RANK = lattice.compute_rank(lattice.bset)
+
     lattice.chamber = 0
     print('constraints:')
     lattice.pretty_print_constraints()
@@ -472,6 +497,7 @@ def start(op, fp, s, fd, k):
     for success in ret:
         print_successes(success)
     x = 0
+    return ret
 
 
 if __name__ == '__main__':
@@ -507,8 +533,6 @@ if __name__ == '__main__':
         op = 'max'
         fp = '[N,M]->{[i,j,k]->[i]}'
         s = '[N,M]->{[i,j,k] : k<=i,j<=4+k and 0<=k<=8 }'
-        s = '[N, M] -> { [i, j, k] : k = i and 0 <= i <= 3 and i <= j <= 4 + i }'
-        s = '[N, M] -> { [i, j, k] : k = i and 0 <= i <= 3 and i <= j <= 4 + i }'
         fd = '[N,M]->{[i,j,k]->[k]}'
     if 1:
         op = 'max'

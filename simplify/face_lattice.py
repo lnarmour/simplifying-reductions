@@ -72,6 +72,7 @@ class FaceLattice:
         self.chambers = []
         self.bset.polyhedral_hull().compute_vertices().foreach_cell(self.chambers.append)
         space = self.bset.get_space()
+        self.space = space
         self.indices = [(k, v) for k, v in space.get_id_dict().items() if v[0] == dim_type.out]
         self.num_indices = len(self.indices)
         self.params = [(k, v) for k, v in space.get_id_dict().items() if v[0] == dim_type.param]
@@ -101,8 +102,7 @@ class FaceLattice:
         # There is actually one face lattice per chamber
         for i in self.vertex_nodes:
             self.face_lattice(chamber=i)
-
-        self.origin = BasicSet.from_point(Point.zero(self.bset.get_space()))
+        self.origin = self.zero()
 
     def get_vertices_on(self, facet):
         maffs = [v.get_expr() for v in self.vertex_nodes[self.chamber][1]]
@@ -111,43 +111,47 @@ class FaceLattice:
         maffs.sort(key=lambda v: multi_aff_to_vec(v, self.num_indices, self.num_params))
         return maffs
 
+    def zero(self):
+        o = BasicSet.universe(self.space)
+        c = Constraint.equality_alloc(self.space)
+        for i in range(self.num_indices):
+            o = o.add_constraint(c.set_coefficient_val(dim_type.out, i, 1))
+        return o
 
-    def bset_from_vertices(self, vertices):
-        space = self.bset.get_space()
-        zero = BasicSet.from_point(Point.zero(space))
-        bset = BasicSet.empty(space)
+    def bset_from_trunc_vertices(self, vertices):
+        if self.num_params < 1:
+            vertices = self.truncate_vertices(vertices)
+        bset = BasicSet.empty(self.space)
         for vertex in vertices:
-            m = build_map(space, vertex, None, self.num_params, self.num_indices)
-            bset = bset.union(zero.apply(m))
+            m = build_map(self.space, vertex, None, self.num_params, self.num_indices)
+            bset = bset.union(self.origin.apply(m))
         return bset.convex_hull()
 
+    def truncate_vertices(self, vertices):
+        return [self.truncate_vertex(v) for v in vertices]
 
-    def make_hyperplane(self, ker_f, vertices):
+    def truncate_vertex(self, vertex):
+        for i in range(self.num_indices):
+            val = vertex.get_aff(i).get_constant_val().trunc()
+            aff = vertex.get_aff(i).set_constant_val(val)
+            vertex = vertex.set_aff(i, aff)
+        return vertex
 
-        if self.num_params < 1:
-            int_vertices = []
-            # round vertices to nearest integer
-            for vertex in vertices:
-                for i in range(self.num_indices):
-                    val = vertex.get_aff(i).get_constant_val().trunc()
-                    aff = vertex.get_aff(i).set_constant_val(val)
-                    vertex = vertex.set_aff(i, aff)
-                int_vertices.append(vertex)
-            vertices = int_vertices
+    def make_hyperplane(self, target_rank, ker_f, vertices):
+        assert self.compute_rank(ker_f) < target_rank
 
-        # translate origin of ker_f to vertex
-        m = build_map(ker_f.get_space(), vertices[0], None, self.num_params, self.num_indices)
-
-        ker_f_at_v0 = ker_f.apply(m)
-        bset = self.bset_from_vertices(vertices)
-
-        hyperplane = bset.union(ker_f_at_v0).convex_hull()
+        bset = self.bset_from_trunc_vertices(vertices)
+        hyperplane = bset.union(ker_f).convex_hull()
+        h_rank = self.compute_rank(hyperplane)
+        if h_rank != target_rank:
+            return None
 
         equalities = [c for c in hyperplane.get_constraints() if c.is_equality()]
         if len(equalities) > 1:
             print('WARNING: two of these vertices may already be in ker_f')
             print(vertices)
         assert len(equalities) > 0
+
         aff = equalities[0].get_aff()
         return aff
 
@@ -220,7 +224,7 @@ class FaceLattice:
 
     def build_graph(self, chamber=0):
         # construct lattice data structure from result
-        self.graph[chamber] = nx.DiGraph()
+        self.graph[chamber] = nx.DiGraph().copy()
         self.explored[chamber] = dict()
 
         self.kfaces[chamber] = {k:v for k, v in self.kfaces[chamber].items() if v}
@@ -394,16 +398,19 @@ class FaceLattice:
         if self.compute_rank(I_no_params) == 0:
             return None
 
-        pieces = []
+        i_pieces = []
         for c in I.get_constraints():
             aff_str = c.get_aff().set_constant_val(0).to_str()
             start = aff_str.index('(') + 1
             end = aff_str.index(')')
-            pieces.append(aff_str[start:end])
+            i_pieces.append(aff_str[start:end])
 
-        fp_1 = '{{[{}]->[{}]}}'.format(
+        p_pieces = [p[0].get_name() for p in self.params]
+
+        fp_1 = '{}{{[{}]->[{}]}}'.format(
+            '[{}]->'.format(','.join(p_pieces)) if num_params else '',
             ','.join([str(i[0]) for i in self.indices]),
-            ','.join(pieces)
+            ','.join(i_pieces)
         )
         return fp_1
 
