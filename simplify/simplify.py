@@ -147,7 +147,7 @@ def add_ineq_constraint(bset, aff):
     return cut_bset
 
 
-def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_labels=None, iss_parent_nodes=[], do_decomp=True, do_splitting=True):
+def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_labels=None, iss_parent_nodes=[]):
     global CNT
     def pprint(*args, **kwargs):
         if len(iss_parent_nodes) == 0:
@@ -257,9 +257,7 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
                 pprint('recursing into {} facet'.format(set(facet)))
                 pprint()
                 ret = simplify(k=k-1, fp_str=fp_str, fd_str=fd_str, node=facet, lattice=lattice, legal_labels=legal_labels,
-                               iss_parent_nodes=iss_parent_nodes.copy(),
-                               do_decomp=do_decomp,
-                               do_splitting=do_splitting)
+                               iss_parent_nodes=iss_parent_nodes.copy())
                 abort = not ret
                 if abort:
                     break
@@ -304,9 +302,7 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
             pprint()
             ret = simplify(k=k, fp_str=fp1_str, fd_str=fd_str, node=node, lattice=lattice,
                            legal_labels=legal_labels,
-                           iss_parent_nodes=iss_parent_nodes.copy(),
-                           do_decomp=do_decomp,
-                           do_splitting=do_splitting)
+                           iss_parent_nodes=iss_parent_nodes.copy())
             #
             # TODO - implement residual reduction with fp2
             #
@@ -374,9 +370,6 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
                 continue
 
             pprint('cut "{}" is valid'.format(l_aff))
-            pprint('node = BasicSet("{}")'.format(node_bset))
-            pprint('L = BasicSet("{}")'.format(l_cut_bset))
-            pprint('R = BasicSet("{}")'.format(r_cut_bset))
 
             l_lattice = FaceLattice(bset=l_cut_bset)
             r_lattice = FaceLattice(bset=r_cut_bset)
@@ -397,15 +390,11 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
             iss_parent_nodes.append((node, lattice.create_facet_bset(node)))
             l_ret = simplify(k=k, fp_str=fp_str, fd_str=fd_str, node=l_lattice.root[0], lattice=l_lattice,
                              legal_labels=legal_labels,
-                             iss_parent_nodes=iss_parent_nodes.copy(),
-                             do_decomp=do_decomp,
-                             do_splitting=do_splitting)
+                             iss_parent_nodes=iss_parent_nodes.copy())
 
             r_ret = simplify(k=k, fp_str=fp_str, fd_str=fd_str, node=r_lattice.root[0], lattice=r_lattice,
                              legal_labels=legal_labels,
-                             iss_parent_nodes=iss_parent_nodes.copy(),
-                             do_decomp=do_decomp,
-                             do_splitting=do_splitting)
+                             iss_parent_nodes=iss_parent_nodes.copy())
 
             if l_ret and r_ret:
                 successful_combos.append(
@@ -453,13 +442,31 @@ class Success:
         ret = '{} {}'.format(ret, self.notes if self.notes else '')
         return ret
 
-    def get_splits(self):
+    def has_split_descendant(self):
+        if self.action == Action.NONE:
+            return False
+        children_have_splits = [c.has_split_descendant() for c in self.children[0]]
         if self.action == Action.INDEX_SET_SPLIT:
-            yield self.l_cut_bset, self.r_cut_bset
-        for split in self.children:
-            for child_success in split:
-                return child_success.get_splits()
+            children_have_splits.append([c.has_split_descendant() for c in self.children[1]])
+        return self.action == Action.INDEX_SET_SPLIT or np.any(children_have_splits)
 
+    def get_splits(self, latest_split=None, result=set()):
+        if self.action == Action.NONE:
+            result.add(latest_split)
+            return result
+
+        if self.action == Action.INDEX_SET_SPLIT:
+            for child in self.children[0]:
+                latest_split = self.l_cut_bset if not child.has_split_descendant() else None
+                result = child.get_splits(latest_split=latest_split, result=result)
+            for child in self.children[1]:
+                latest_split = self.r_cut_bset if not child.has_split_descendant() else None
+                result = child.get_splits(latest_split=latest_split, result=result)
+        else:
+            for child in self.children[0]:
+                result = child.get_splits(latest_split=latest_split, result=result)
+
+        return result
 
 class Action(Enum):
     INDEX_SET_SPLIT = 1
@@ -483,7 +490,7 @@ def start(op, fp, s, fd, k):
     print('constraints:')
     lattice.pretty_print_constraints()
     print('---')
-    ret = simplify(k=k, fp_str=fp, fd_str=fd, node=lattice.root[0], lattice=lattice, legal_labels=legal_labels, do_decomp=False, do_splitting=True)
+    ret = simplify(k=k, fp_str=fp, fd_str=fd, node=lattice.root[0], lattice=lattice, legal_labels=legal_labels)
     print('---')
     print('op:', op)
     print('fp:', fp)

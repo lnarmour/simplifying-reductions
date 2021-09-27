@@ -140,3 +140,84 @@ def plot_3d_sets(L, alpha=0.6, fig=None, split=None, split_border=False, split_a
         return ax
     except:
         pass
+
+def plot_bset_shape(bset_data, show_vertices=True, color="gray",
+                    alpha=1.0,
+                    vertex_color=None,
+                    vertex_marker="o", vertex_size=10,
+                    scale=1, border=0):
+    """
+    Given an basic set, plot the shape formed by the constraints that define
+    the basic set.
+
+    :param bset_data: The basic set to plot.
+    :param show_vertices: Show the vertices at the corners of the basic set's
+                          shape.
+    :param color: The background color of the shape.
+    :param alpha: The alpha value to use for the shape.
+    :param vertex_color: The color of the vertex markers.
+    :param vertex_marker: The marker used to draw the vertices.
+    :param vertex_size: The size of the vertices.
+    :param border: Increase the size of the area filled with the background
+                   by the value given as 'border'.
+    :param scale: Scale the values.
+    """
+
+    assert bset_data.is_bounded(), "Expected bounded set"
+
+    if not vertex_color:
+        vertex_color = color
+
+    vertices = bset_get_vertex_coordinates(bset_data, scale=scale)
+
+    if show_vertices:
+        dimX = [x[0] for x in vertices]
+        dimY = [x[1] for x in vertices]
+        plt.plot(dimX, dimY, vertex_marker, markersize=vertex_size,
+                  color=vertex_color)
+
+    if len(vertices) == 0:
+        return
+
+    import matplotlib.path as _matplotlib_path
+    import matplotlib.patches as _matplotlib_patches
+    Path = _matplotlib_path.Path
+    PathPatch = _matplotlib_patches.PathPatch
+    codes = [Path.LINETO] * len(vertices)
+    codes[0] = Path.MOVETO
+    pathdata = [(code, tuple(coord)) for code, coord in zip(codes, vertices)]
+    pathdata.append((Path.CLOSEPOLY, (0, 0)))
+    codes, verts = zip(*pathdata)
+    import matplotlib.transforms as _matplotlib_transforms
+    t = _matplotlib_transforms.Affine2D().translate(1, 0)
+    path = Path(verts, codes)
+
+    linewidth = 0
+    fill = True
+
+    if len(vertices) == 2:
+        linewidth = 2;
+        fill = False;
+
+    pathes = []
+    import math
+    steps = 200
+    for i in range(steps):
+        pi = i * 2 * math.pi/steps
+        offset = border
+        x = math.sin(pi) * offset
+        y = math.cos(pi) * offset
+        t = _matplotlib_transforms.Affine2D().translate(x,y)
+        pathT = path.transformed(t)
+        pathes.append(pathT)
+
+    for p in pathes:
+        path = _matplotlib_path.Path.make_compound_path(path, p)
+
+    if len(vertices) == 1:
+        patch = _matplotlib_patches.Circle(vertices[0], border, color=color,
+                                        alpha=alpha)
+    else:
+        patch = PathPatch(path, alpha=alpha, linewidth=linewidth,
+            color=color, fill=fill)
+    plt.gca().add_patch(patch)
