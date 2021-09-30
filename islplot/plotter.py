@@ -85,11 +85,13 @@ def plot_map(map_data, edge_style="->", edge_width=1, color="black", shrink=10,
                             _plt, color=color, style=edge_style,
                             width=edge_width, shrink=shrink)
 
-def plot_bset_shape(bset_data, show_vertices=True, color="gray",
-                    alpha=1.0,
-                    vertex_color=None,
-                    vertex_marker="o", vertex_size=10,
-                    scale=1, border=0):
+def plot_bset_shape(bset_data, show_vertices=True, color="blue",
+                    alpha=0.5,
+                    vertex_color='k',
+                    vertex_marker="o", vertex_size=5,
+                    scale=1, border=0,
+                    figure=None):
+
     """
     Given an basic set, plot the shape formed by the constraints that define
     the basic set.
@@ -114,11 +116,15 @@ def plot_bset_shape(bset_data, show_vertices=True, color="gray",
 
     vertices = bset_get_vertex_coordinates(bset_data, scale=scale)
 
+    if not figure:
+        figure = _plt.figure()
+    ax = figure.gca()
+
     if show_vertices:
         dimX = [x[0] for x in vertices]
         dimY = [x[1] for x in vertices]
-        _plt.plot(dimX, dimY, vertex_marker, markersize=vertex_size,
-                  color=vertex_color)
+        ax.plot(dimX, dimY, vertex_marker, markersize=vertex_size,
+                 color=vertex_color)
 
     if len(vertices) == 0:
         return
@@ -164,7 +170,7 @@ def plot_bset_shape(bset_data, show_vertices=True, color="gray",
     else:
         patch = PathPatch(path, alpha=alpha, linewidth=linewidth,
             color=color, fill=fill)
-    _plt.gca().add_patch(patch)
+    ax.add_patch(patch)
 
 def plot_set_shapes(set_data, *args, **kwargs):
     """

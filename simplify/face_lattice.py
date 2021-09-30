@@ -105,6 +105,14 @@ class FaceLattice:
         self.origin = self.zero()
 
     def get_vertices_on(self, facet):
+        vertices = []
+        for vertex_facet in self.vertex_nodes[self.chamber][2]:
+            vertex = self.create_facet_bset(vertex_facet)
+            point = vertex.sample_point()
+            vertices.append(vertex.sample_point())
+        return vertices
+
+    def get_vertex_maffs_on(self, facet):
         maffs = [v.get_expr() for v in self.vertex_nodes[self.chamber][1]]
         vertex_facets = self.vertex_nodes[self.chamber][2]
         maffs = [maff for maff,s in zip(maffs, vertex_facets) if facet.issubset(s)]
@@ -137,11 +145,48 @@ class FaceLattice:
             vertex = vertex.set_aff(i, aff)
         return vertex
 
+    def bset_from_points(self, points):
+        bset = None
+        for point in points:
+            if not bset:
+                bset = BasicSet.from_point(point)
+            else:
+                bset = bset.union(BasicSet.from_point(point))
+        return bset.polyhedral_hull()
+
+    def build_map_from_points(self, p0, p1):
+        space = Space.alloc(self.space.get_ctx(), 0, self.num_indices, self.num_indices)
+        for name, tuple in self.space.get_var_dict().items():
+            type, pos = tuple
+            space = space.set_dim_name(type, pos, name)
+            if type == dim_type.out:
+                space = space.set_dim_name(dim_type.in_, pos, name)
+
+        m = BasicMap.universe(space)
+
+        for i in range(self.num_indices):
+            diff = p1.get_coordinate_val(dim_type.out, i) - p0.get_coordinate_val(dim_type.out, i)
+            c = Constraint.alloc_equality(space)
+            c = c.set_coefficient_val(dim_type.out, i, 1)
+            c = c.set_coefficient_val(dim_type.in_, i, -1)
+            c = c.set_constant_val(diff)
+            m = m.add_constraint(c)
+        assert len(m.get_constraints()) == self.num_indices
+        return m
+
+
     def make_hyperplane(self, target_rank, ker_f, vertices):
         assert self.compute_rank(ker_f) < target_rank
 
-        bset = self.bset_from_trunc_vertices(vertices)
-        hyperplane = bset.union(ker_f).convex_hull()
+        #bset = self.bset_from_trunc_vertices(vertices)
+        bset = self.bset_from_points(vertices)
+
+        if bset.intersect(ker_f).is_empty():
+            # translate ker_f to any one of the vertices
+            m = self.build_map_from_points(ker_f.sample_point(), vertices[0])
+            ker_f = ker_f.apply(m)
+
+        hyperplane = bset.union(ker_f).polyhedral_hull()
         h_rank = self.compute_rank(hyperplane)
         if h_rank != target_rank:
             return None
@@ -150,7 +195,7 @@ class FaceLattice:
         if len(equalities) > 1:
             print('WARNING: two of these vertices may already be in ker_f')
             print(vertices)
-        assert len(equalities) > 0
+        assert len(equalities) == 1
 
         aff = equalities[0].get_aff()
         return aff
