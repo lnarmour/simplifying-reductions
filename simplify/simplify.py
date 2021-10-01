@@ -284,36 +284,15 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
     pprint('STEP D - index set splitting')
     pprint()
 
-    assert lattice.num_params == 0, "can't handle splitting with parametric polyhedra"
-
     node_bset = lattice.create_facet_bset(node)
     current_rank = lattice.compute_rank(lattice.bset)
+
+    vertices = lattice.get_vertices(node)
+
     split_affs = set()
-
-    all_vertices = [p for p in lattice.get_vertices_on(node) if not p.is_void()]
-
     for f in [fp, fd]:
-        ker_f = lattice.ker(f)
-        ker_f_rank = lattice.compute_rank(ker_f)
-
-        # need to construct some (RANK-1)-dimensional hyperplane
-        if ker_f_rank == RANK - 1:
-            # in this case, there is one equality in ker_f
-            for vertex in all_vertices:
-                # translate ker_f to vertex and take its equality constraint as aff
-                m = lattice.build_map_from_points(vertex, lattice.origin.sample_point())
-                ker_f_at_v0 = ker_f.apply(m).polyhedral_hull()
-                equalities = [c for c in ker_f_at_v0.get_constraints() if c.is_equality()]
-                assert len(equalities) == 1
-                split_aff = equalities[0].get_aff()
-                split_affs.add(split_aff)
-        else:
-            num_vertices_needed = RANK - lattice.compute_rank(ker_f)
-            for vertices in combinations(all_vertices, num_vertices_needed):
-                split_aff = lattice.make_hyperplane(RANK - 1, ker_f, vertices)
-                if not split_aff:
-                    continue
-                split_affs.add(split_aff)
+        for vertex in vertices:
+            split_affs = split_affs.union(lattice.make_hyperplane(RANK - 1, vertex, f))
 
     for split_aff in split_affs:
         r_aff = split_aff
@@ -492,7 +471,10 @@ class Success:
     def get_splits(self, latest_split=None, result=None):
         if result is None:
             raise Exception('pass "result=set()"')
-        return list(self.get_splits_rec(latest_split, result))
+        ret = self.get_splits_rec(latest_split, result)
+        if ret is None:
+            ret = []
+        return list(ret)
 
 
 

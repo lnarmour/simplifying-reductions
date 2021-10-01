@@ -103,16 +103,9 @@ class FaceLattice:
         for i in self.vertex_nodes:
             self.face_lattice(chamber=i)
         self.origin = self.zero()
+        self.basis_sets = self.construct_basis_vectors()
 
-    def get_vertices_on(self, facet):
-        vertices = []
-        for vertex_facet in self.vertex_nodes[self.chamber][2]:
-            vertex = self.create_facet_bset(vertex_facet)
-            point = vertex.sample_point()
-            vertices.append(vertex.sample_point())
-        return vertices
-
-    def get_vertex_maffs_on(self, facet):
+    def get_vertices(self, facet):
         maffs = [v.get_expr() for v in self.vertex_nodes[self.chamber][1]]
         vertex_facets = self.vertex_nodes[self.chamber][2]
         maffs = [maff for maff,s in zip(maffs, vertex_facets) if facet.issubset(s)]
@@ -126,36 +119,20 @@ class FaceLattice:
             o = o.add_constraint(c.set_coefficient_val(dim_type.out, i, 1))
         return o
 
-    def bset_from_trunc_vertices(self, vertices):
-        if self.num_params < 1:
-            vertices = self.truncate_vertices(vertices)
-        bset = BasicSet.empty(self.space)
-        for vertex in vertices:
-            m = build_map(self.space, vertex, None, self.num_params, self.num_indices)
-            bset = bset.union(self.origin.apply(m))
-        return bset.convex_hull()
-
-    def truncate_vertices(self, vertices):
-        return [self.truncate_vertex(v) for v in vertices]
-
-    def truncate_vertex(self, vertex):
+    def construct_basis_vectors(self):
+        ret = []
+        # construct sets spanned by basis vectors in d-dimensional polyhedron
+        eq = Constraint.equality_alloc(self.space)
         for i in range(self.num_indices):
-            val = vertex.get_aff(i).get_constant_val().trunc()
-            aff = vertex.get_aff(i).set_constant_val(val)
-            vertex = vertex.set_aff(i, aff)
-        return vertex
+            bset = BasicSet.universe(self.space)
+            for j in range(self.num_indices):
+                val = 0 if i == j else 1
+                bset = bset.add_constraint(eq.set_coefficient_val(dim_type.out, j, val))
+            ret.append(bset)
+        return ret
 
-    def bset_from_points(self, points):
-        bset = None
-        for point in points:
-            if not bset:
-                bset = BasicSet.from_point(point)
-            else:
-                bset = bset.union(BasicSet.from_point(point))
-        return bset.polyhedral_hull()
-
-    def build_map_from_points(self, p0, p1):
-        space = Space.alloc(self.space.get_ctx(), 0, self.num_indices, self.num_indices)
+    def build_map(self, vertex):
+        space = Space.alloc(self.space.get_ctx(), self.num_params, self.num_indices, self.num_indices)
         for name, tuple in self.space.get_var_dict().items():
             type, pos = tuple
             space = space.set_dim_name(type, pos, name)
@@ -165,40 +142,60 @@ class FaceLattice:
         m = BasicMap.universe(space)
 
         for i in range(self.num_indices):
-            diff = p1.get_coordinate_val(dim_type.out, i) - p0.get_coordinate_val(dim_type.out, i)
-            c = Constraint.alloc_equality(space)
-            c = c.set_coefficient_val(dim_type.out, i, 1)
-            c = c.set_coefficient_val(dim_type.in_, i, -1)
-            c = c.set_constant_val(diff)
-            m = m.add_constraint(c)
-        assert len(m.get_constraints()) == self.num_indices
-        return m
+            aff = vertex.get_aff(i)
+            # can only set integer values so scale all dims by lcm denominators
+            max_den = aff.get_constant_val().get_den_val().to_python()
+            if self.num_params > 0:
+                max_den = np.lcm.reduce([max_den] + [aff.get_coefficient_val(dim_type.param, j).get_den_val().to_python() for j in range(self.num_params)])
+            constraint = Constraint.alloc_equality(space)
+            constraint = constraint.set_coefficient_val(dim_type.out, i, max_den * -1)
+            constraint = constraint.set_coefficient_val(dim_type.in_, i, max_den)
+            for j in range(self.num_params):
+                val = aff.get_coefficient_val(dim_type.param, j)
+                constraint = constraint.set_coefficient_val(dim_type.param, j, val * max_den)
+            constraint = constraint.set_constant_val(aff.get_constant_val() * max_den)
+            m = m.add_constraint(constraint)
 
-
-    def make_hyperplane(self, target_rank, ker_f, vertices):
-        assert self.compute_rank(ker_f) < target_rank
-
-        #bset = self.bset_from_trunc_vertices(vertices)
-        bset = self.bset_from_points(vertices)
-
-        if bset.intersect(ker_f).is_empty():
-            # translate ker_f to any one of the vertices
-            m = self.build_map_from_points(ker_f.sample_point(), vertices[0])
-            ker_f = ker_f.apply(m)
-
-        hyperplane = bset.union(ker_f).polyhedral_hull()
-        h_rank = self.compute_rank(hyperplane)
-        if h_rank != target_rank:
+        if len(m.get_constraints()) == self.num_indices:
+            return m
+        else:
             return None
 
-        equalities = [c for c in hyperplane.get_constraints() if c.is_equality()]
-        if len(equalities) > 1:
-            print('WARNING: two of these vertices may already be in ker_f')
-            print(vertices)
-        assert len(equalities) == 1
 
-        aff = equalities[0].get_aff()
-        return aff
+    def make_hyperplane(self, d, vertex, f):
+        # compute d-dimensional hyperplane in null space of "f" passing through "vertex"
+        ker_f = self.ker(f)
+        k = self.compute_rank(ker_f)
+
+        hyperplanes = []
+        if d - k > 0:
+            for C in combinations(self.basis_sets, d - k):
+                hyperplane = ker_f
+                for basis_set in C:
+                    hyperplane = hyperplane.union(basis_set).polyhedral_hull()
+                if self.compute_rank(hyperplane) < d:
+                    continue
+                hyperplanes.append(hyperplane)
+        else:
+            hyperplanes.append(ker_f)
+
+        m = self.build_map(vertex)
+        if not m:
+            return set()
+
+        # translate each hyperplane to vertex
+        hyperplanes = [h.apply(m).polyhedral_hull() for h in hyperplanes]
+
+        affs = set()
+        for h in hyperplanes:
+            equality_constraints = [c for c in h.get_constraints() if c.is_equality()]
+            assert len(equality_constraints) == 1
+            equality = equality_constraints[0]
+            affs.add(equality.get_aff())
+
+        return affs
+
+
 
     def vertex_saturates_constraint(self, vertex, constraint):
         # returns true if vertex saturate the k'th constraint

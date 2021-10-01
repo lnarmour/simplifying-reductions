@@ -5,18 +5,13 @@ from simplify.homothety import *
 
 if __name__ == '__main__':
     op = 'max'
-    fp = '{[i,j,k]->[i,j]}'
-    fd = '{[i,j,k]->[k]}'
-    s = '{[i,j,k] : k<=i,j<=10+k and 0<=k<=10}'
+    fp = '[N]->{[i,j,k]->[i+j]}'  # this currently take a LONG time, why?
+    fd = '[N]->{[i,j,k]->[k]}'
+    s = '[N]->{[i,j,k] : k<=i,j<=N+k and 0<=k<=2N}'
 
-    #op = 'max'
-    #fp = '{[i,j]->[i]}'
-    #fd = '{[i,j]->[j]}'
-    #s = '{[i,j] : 0<=j and i-10<=j and j<=i and 2j<=i+14 }'
-
-    successes = start(op, fp, s, fd, verbose=False, report_all=False)
+    successes = start(op, fp, s, fd, verbose=True, report_all=False)
 
     for success in successes:
-        P = success.get_splits()
+        P = success.get_splits(result=set())
         [print(p) for p in P]
         print()
