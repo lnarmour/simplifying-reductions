@@ -5,9 +5,9 @@ from simplify.homothety import *
 
 if __name__ == '__main__':
     op = 'max'
-    fp = '[N]->{[i,j,k]->[i+j]}'  # this currently take a LONG time, why?
-    fd = '[N]->{[i,j,k]->[k]}'
-    s = '[N]->{[i,j,k] : k<=i,j<=N+k and 0<=k<=2N}'
+    fp = '[M,N]->{[i,j]->[i]}'
+    fd = '[M,N]->{[i,j]->[j]}'
+    s = '[M,N]->{[i,j] : 0<=j and i-N<=j and j<=i and j<=M and N<M }'
 
     successes = start(op, fp, s, fd, verbose=True, report_all=False)
 
