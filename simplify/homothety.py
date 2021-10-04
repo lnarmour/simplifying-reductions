@@ -84,6 +84,25 @@ def homothetic(s0, s1, chamber=0, verbose=None):
     return bsets_are_homothetic(BasicSet(s0), BasicSet(s1), chamber=chamber, verbose=verbose)
 
 
+def bsets_are_similar(bset0, bset1, num_indices):
+    def S(bset):
+        A = []
+        for c in bset.get_constraints():
+            k = []
+            aff = c.get_aff()
+            for i in range(num_indices):
+                k.append(aff.get_coefficient_val(dim_type.in_, i))
+            A.append(k)
+        A.sort()
+        B = []
+        for a in A:
+            B += a
+        #print(B)
+        return B
+
+    return S(bset0) == S(bset1)
+
+
 def bsets_are_homothetic(bset0, bset1, chamber=0, verbose=None):
     def pprint(*args, **kwargs):
         if verbose:

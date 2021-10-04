@@ -19,10 +19,12 @@ def print_successes(success, indent=0, prefix=''):
     if success.action == Action.NONE:
         return
     elif success.action == Action.INDEX_SET_SPLIT:
-        for child in success.children[0]:
-            print_successes(child, indent + 2, 'L')
-        for child in success.children[1]:
-            print_successes(child, indent + 2, 'R')
+        for chamber in success.l_children:
+            for child in success.l_children[chamber]:
+                print_successes(child, indent + 2, 'L.{}'.format(chamber))
+        for chamber in success.r_children:
+            for child in success.r_children[chamber]:
+                print_successes(child, indent + 2, 'R.{}'.format(chamber))
     else:
         if success.children:
             for child in success.children[0]:
@@ -174,10 +176,11 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
         for parent_node in reversed(iss_parent_nodes):
             parent_facet, parent_bset = parent_node
             current_bset = lattice.create_facet_bset(node)
-            if bsets_are_homothetic(parent_bset, current_bset):
+            #if bsets_are_homothetic(parent_bset, current_bset):
+            if bsets_are_similar(parent_bset, current_bset, lattice.num_indices):
                 pprint('SUCCESS')
-                success = Success(Action.HOMOTHETY, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy())
-                success.children = [[Success(Action.NONE, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy())]]
+                success = Success(Action.SIMILARITY, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(), chamber_domain=lattice.get_chamber_domain())
+                success.children = [[Success(Action.NONE, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(), chamber_domain=lattice.get_chamber_domain())]]
                 return [success]
         pprint('No homothety detected.')
         pprint()
@@ -186,7 +189,7 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
     pprint()
     if k == 0:
         pprint('SUCCESS')
-        return [Success(Action.NONE, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy())]
+        return [Success(Action.NONE, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(), chamber_domain=lattice.get_chamber_domain())]
 
     fp = BasicMap(fp_str)
     fd = BasicMap(fd_str)
@@ -274,8 +277,8 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
                 rets.append(ret)
             if not abort:
                 if len(rets) == 0:
-                    rets.append([Success(Action.NONE, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy())])
-                successful_combos.append(Success(Action.RHO, node, fp_str, candidate_facets + boundary_facets, combo, children=rets, iss_parent_nodes=iss_parent_nodes.copy()))
+                    rets.append([Success(Action.NONE, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(), chamber_domain=lattice.get_chamber_domain())])
+                successful_combos.append(Success(Action.RHO, node, fp_str, candidate_facets + boundary_facets, combo, children=rets, iss_parent_nodes=iss_parent_nodes.copy(), chamber_domain=lattice.get_chamber_domain()))
                 if not report_all:
                     return successful_combos
             pprint()
@@ -288,19 +291,35 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
     current_rank = lattice.compute_rank(lattice.bset)
 
     vertices = lattice.get_vertices(node)
+    vertices.sort(key=lambda v: multi_aff_to_vec(v, lattice.num_indices, lattice.num_params))
 
-    split_affs = set()
-    for f in [fp, fd]:
+    candidate_split_affs_set = set()
+    candidate_split_affs = list()
+    x = 0
+    Fs = [fp, fd]
+    if len(iss_parent_nodes) % 2 == 1:
+        # switch the order each time, make alternating cuts
+        Fs = reversed(Fs)
+    for f in Fs:
         for vertex in vertices:
-            split_affs = split_affs.union(lattice.make_hyperplane(RANK - 1, vertex, f))
+            split_affs = lattice.make_hyperplane(RANK - 1, vertex, f)
+            for split_aff in split_affs:
+                if split_aff not in candidate_split_affs_set:
+                    candidate_split_affs.append(split_aff)
 
-    for split_aff in split_affs:
+    for split_aff in candidate_split_affs:
         r_aff = split_aff
         l_aff = r_aff.neg()
         l_aff = l_aff.set_constant_val(l_aff.get_constant_val() - 1)
 
         l_cut_bset = add_ineq_constraint(node_bset, l_aff)
         r_cut_bset = add_ineq_constraint(node_bset, r_aff)
+
+        # add chamber parameter domain constraints
+        for c in lattice.get_chamber_domain_constraints():
+            l_cut_bset = l_cut_bset.add_constraint(c).remove_redundancies()
+            r_cut_bset = r_cut_bset.add_constraint(c).remove_redundancies()
+
         l_cut_rank = lattice.compute_rank(l_cut_bset)
         r_cut_rank = lattice.compute_rank(r_cut_bset)
         either_is_empty = l_cut_bset.is_empty() or r_cut_bset.is_empty()
@@ -330,27 +349,48 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
         if not iss_parent_nodes:
             iss_parent_nodes = []
         iss_parent_nodes.append((node, lattice.create_facet_bset(node)))
-        l_ret = simplify(k=k, fp_str=fp_str, fd_str=fd_str, node=l_lattice.root[0], lattice=l_lattice,
-                         legal_labels=legal_labels,
-                         iss_parent_nodes=iss_parent_nodes.copy(),
-                         verbose=verbose,
-                         check_homothety=check_homothety,
-                         report_all=report_all)
+        l_rets = {}
+        for i, chamber in enumerate(l_lattice.chambers):
+            l_lattice.chamber = i
+            l_ret = simplify(k=k, fp_str=fp_str, fd_str=fd_str, node=l_lattice.root[0], lattice=l_lattice,
+                             legal_labels=legal_labels,
+                             iss_parent_nodes=iss_parent_nodes.copy(),
+                             verbose=verbose,
+                             check_homothety=check_homothety,
+                             report_all=report_all)
+            if not l_ret:
+                l_rets = {}
+                break
+            l_rets[i] = l_ret
 
-        r_ret = simplify(k=k, fp_str=fp_str, fd_str=fd_str, node=r_lattice.root[0], lattice=r_lattice,
-                         legal_labels=legal_labels,
-                         iss_parent_nodes=iss_parent_nodes.copy(),
-                         verbose=verbose,
-                         check_homothety=check_homothety,
-                         report_all=report_all)
+        if not l_rets:
+            continue
+
+        r_rets = {}
+        for i, chamber in enumerate(r_lattice.chambers):
+            r_lattice.chamber = i
+            r_ret = simplify(k=k, fp_str=fp_str, fd_str=fd_str, node=r_lattice.root[0], lattice=r_lattice,
+                             legal_labels=legal_labels,
+                             iss_parent_nodes=iss_parent_nodes.copy(),
+                             verbose=verbose,
+                             check_homothety=check_homothety,
+                             report_all=report_all)
+            if not r_ret:
+                r_rets = {}
+                break
+            r_rets[i] = r_ret
 
         if l_ret and r_ret:
             successful_combos.append(
                 Success(Action.INDEX_SET_SPLIT, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(),
-                        children=[l_ret, r_ret],
+                        l_children=l_rets,
+                        r_children=r_rets,
+                        l_chambers=[c.get_domain() for c in l_lattice.chambers],
+                        r_chambers=[c.get_domain() for c in r_lattice.chambers],
                         notes='at {}'.format(split_aff),
                         l_cut_bset=l_cut_bset,
-                        r_cut_bset=r_cut_bset))
+                        r_cut_bset=r_cut_bset,
+                        chamber_domain=lattice.get_chamber_domain()))
             if not report_all:
                 return successful_combos
 
@@ -400,7 +440,8 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
                 successful_combos.append(
                     Success(Action.DECOMPOSITION, node, fp_str, fp_decomp=fp1_str, children=[ret],
                             iss_parent_nodes=iss_parent_nodes.copy(),
-                            notes='on {}'.format(set(weak_facet))))
+                            notes='on {}'.format(set(weak_facet)),
+                            chamber_domain=lattice.get_chamber_domain()))
                 break
     else:
         pprint("decomposition not feasible for fp = {}".format(fp_str))
@@ -413,7 +454,9 @@ class Success:
 
     def __init__(self, action, node, fp_str, facets=None, labelings=None, iss_parent_nodes=None,
                  splits=None, children=list(), fp_decomp=None,
-                 notes=None, l_cut_bset=None, r_cut_bset=None):
+                 notes=None, l_cut_bset=None, r_cut_bset=None,
+                 l_children=None, r_children=None, l_chambers=None, r_chambers=None,
+                 chamber_domain=None):
         self.action = action
         self.node = node
         self.fp_str = fp_str
@@ -421,10 +464,15 @@ class Success:
         self.labelings = labelings
         self.iss_parent_nodes = iss_parent_nodes
         self.children = children
+        self.l_children = l_children
+        self.r_children = r_children
+        self.l_chambers = l_chambers
+        self.r_chambers = r_chambers
         self.fp_decomp = fp_decomp
         self.notes = notes
         self.l_cut_bset = l_cut_bset
         self.r_cut_bset = r_cut_bset
+        self.chamber_domain = chamber_domain
 
     def __str__(self):
         if not self.iss_parent_nodes:
@@ -450,28 +498,45 @@ class Success:
             children_have_splits.append([c.has_split_descendant() for c in self.children[1]])
         return self.action == Action.INDEX_SET_SPLIT or np.any(children_have_splits)
 
-    def get_splits_rec(self, latest_split=None, result=set()):
-        if not self.children:
-            result.add(latest_split)
+    def get_splits_rec(self, latest_split=None, result=set(), params=None):
+        if not self.children and not self.l_children and not self.r_children:
+            # params in chamber, then add this split
+            if not params:
+                result.add(latest_split)
+            elif not params.intersect(self.chamber_domain).is_empty():
+                result.add(latest_split)
+
             return result
 
         if self.action == Action.INDEX_SET_SPLIT:
-            for child in self.children[0]:
-                latest_split = self.l_cut_bset if not child.has_split_descendant() else None
-                result = child.get_splits_rec(latest_split=latest_split, result=result)
-            for child in self.children[1]:
-                latest_split = self.r_cut_bset if not child.has_split_descendant() else None
-                result = child.get_splits_rec(latest_split=latest_split, result=result)
+            for chamber in self.l_children:
+                for child in self.l_children[chamber]:
+                    latest_split = self.l_cut_bset if not child.has_split_descendant() else None
+                    result = child.get_splits_rec(latest_split=latest_split, result=result, params=params)
+            for chamber in self.r_children:
+                for child in self.r_children[chamber]:
+                    latest_split = self.r_cut_bset if not child.has_split_descendant() else None
+                    result = child.get_splits_rec(latest_split=latest_split, result=result, params=params)
         else:
             for child in self.children[0]:
-                result = child.get_splits_rec(latest_split=latest_split, result=result)
+                result = child.get_splits_rec(latest_split=latest_split, result=result, params=params)
 
         return result
 
-    def get_splits(self, latest_split=None, result=None):
+    def get_splits(self, latest_split=None, result=None, params=None):
         if result is None:
             raise Exception('pass "result=set()"')
-        ret = self.get_splits_rec(latest_split, result)
+
+        # num params must match
+        nP0 = len([v for v in self.chamber_domain.get_var_dict().items() if v[1][0] == dim_type.param])
+        if params:
+            nP1 = len([v for v in params.get_var_dict().items() if v[1][0] == dim_type.param])
+        else:
+            nP1 = 0
+        if nP0 != nP1:
+            raise Exception('must also specify param values via "params"')
+
+        ret = self.get_splits_rec(latest_split, result, params=params)
         if ret is None:
             ret = []
         return list(ret)
@@ -482,7 +547,7 @@ class Action(Enum):
     INDEX_SET_SPLIT = 1
     RHO = 2
     DECOMPOSITION = 3
-    HOMOTHETY = 4
+    SIMILARITY = 4
     NONE = 5
 
 

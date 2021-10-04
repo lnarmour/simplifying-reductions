@@ -58,7 +58,7 @@ class FaceLattice:
             return
         if s:
             self.s = s
-        self.bset = bset if bset else BasicSet(s).remove_redundancies()
+        self.bset = bset.remove_redundancies() if bset else BasicSet(s).remove_redundancies()
         assert self.bset.is_bounded()
         self.space = self.bset.get_space()
         self.isl_C = list(self.bset.get_constraints())
@@ -111,6 +111,27 @@ class FaceLattice:
         maffs = [maff for maff,s in zip(maffs, vertex_facets) if facet.issubset(s)]
         maffs.sort(key=lambda v: multi_aff_to_vec(v, self.num_indices, self.num_params))
         return maffs
+
+    def get_chamber_domain(self):
+        return self.chambers[self.chamber].get_domain()
+
+    def get_chamber_domain_constraints(self):
+        C = []
+        empty_aff = Constraint.equality_alloc(self.space).get_aff()
+
+        for c in self.get_chamber_domain().get_constraints():
+            aff = c.get_aff()
+            new_aff = empty_aff
+            for i in range(self.num_params):
+                new_aff = new_aff.set_coefficient_val(dim_type.param, i, aff.get_coefficient_val(dim_type.param, i))
+            new_aff = new_aff.set_constant_val(aff.get_constant_val())
+
+            if c.is_equality():
+                C.append(Constraint.equality_from_aff(new_aff))
+            else:
+                C.append(Constraint.inequality_from_aff(new_aff))
+
+        return C
 
     def zero(self):
         o = BasicSet.universe(self.space)
@@ -181,17 +202,21 @@ class FaceLattice:
 
         m = self.build_map(vertex)
         if not m:
-            return set()
+            return list()
 
         # translate each hyperplane to vertex
         hyperplanes = [h.apply(m).polyhedral_hull() for h in hyperplanes]
 
-        affs = set()
+        affs_set = set()
+        affs = []
         for h in hyperplanes:
             equality_constraints = [c for c in h.get_constraints() if c.is_equality()]
             assert len(equality_constraints) == 1
             equality = equality_constraints[0]
-            affs.add(equality.get_aff())
+            aff = equality.get_aff()
+            if aff not in affs_set:
+                affs.append(aff)
+                affs_set.add(aff)
 
         return affs
 
