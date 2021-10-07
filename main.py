@@ -5,10 +5,12 @@ from simplify.homothety import *
 
 if __name__ == '__main__':
     op = 'max'
-    fp = '{[i,j]->[i]}'
-    fd = '{[i,j]->[j]}'
-    s = '{[i,j] : 0<=j and i-10<=j and j<=i and 2j<=i+14 }'
-    #dom = BasicSet('[M,N]->{[i,j] : N=10 and M=50 }')
+    fp = '[N]->{[i,j,k]->[j]}'
+    fd = '[N]->{[i,j,k]->[k]}'
+    s = '[N]->{[i,j,k] : k<=i,j<=N+k and 0<=k<=5N}'
+
+    # visulaization
+    dom = BasicSet('[N]->{[i,j,k] : N=5}')
 
 
 
@@ -19,5 +21,5 @@ if __name__ == '__main__':
 
     for success in successes:
         S = None
-        for P in success.get_splits(result=set(), params=None):
+        for P in success.get_splits(result=set(), params=dom):
             print(P)

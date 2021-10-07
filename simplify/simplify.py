@@ -148,6 +148,37 @@ def prune_combos(label_combos):
     return unique_combos
 
 
+def get_critical_vertices(fd, parent, parent_rank, candidate_facets, lattice):
+    # at node, returns the vertices that belong to at least two candidate_facets that
+    # either can both be considered ADD faces, or both SUB faces
+    critical_vertices = []
+
+    ker_fd = lattice.ker(fd)
+
+    for facets in combinations(candidate_facets, parent_rank):
+        bset = ker_fd
+        # all ADD
+        for p in facets:
+            for i in p - parent:
+                aff = lattice.isl_C[i].get_aff()
+                for j in range(lattice.num_params):
+                    aff = aff.set_coefficient_val(dim_type.param, j, 0)
+                aff = aff.set_constant_val(-1)
+                aff_set = ker_fd.add_constraint(Constraint.inequality_from_aff(aff))
+                bset = bset.intersect(aff_set)
+
+        bset = bset - lattice.origin
+        if not bset.is_empty():
+            # vertices in common between L and R are "critical"
+            for vertex, node in zip(lattice.vertex_nodes[lattice.chamber][1],lattice.vertex_nodes[lattice.chamber][2]):
+                for p in facets:
+                    if not p.issubset(node):
+                        break
+                    critical_vertices.append(vertex.get_expr())
+
+    return critical_vertices
+
+
 def add_ineq_constraint(bset, aff):
     constraint = Constraint.inequality_from_aff(aff)
     cut_bset = bset.add_constraint(constraint).remove_redundancies()
@@ -170,6 +201,13 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
 
     successful_combos = []
 
+    fp = BasicMap(fp_str)
+    fd = BasicMap(fd_str)
+
+    candidate_facets = lattice.get_candidate_facets(node, fp)
+    node_rank = lattice.compute_rank(lattice.create_facet_bset(node))
+    critical_vertices = get_critical_vertices(fd, node, node_rank, candidate_facets, lattice)
+
     if check_homothety:
         pprint('STEP A.0 - have we seen this problem before?')
         pprint()
@@ -177,12 +215,12 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
             parent_facet, parent_bset = parent_node
             current_bset = lattice.create_facet_bset(node)
             #if bsets_are_homothetic(parent_bset, current_bset):
-            if bsets_are_similar(parent_bset, current_bset, lattice.num_indices):
+            if bsets_are_similar(parent_bset, current_bset, lattice.num_indices) and len(critical_vertices) == 0:
                 pprint('SUCCESS')
                 success = Success(Action.SIMILARITY, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(), chamber_domain=lattice.get_chamber_domain())
                 success.children = [[Success(Action.NONE, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(), chamber_domain=lattice.get_chamber_domain())]]
                 return [success]
-        pprint('No homothety detected.')
+        pprint('No similarity detected.')
         pprint()
 
     pprint('STEP A.1 - if k==0 return else continue. k={}'.format(k))
@@ -191,8 +229,6 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
         pprint('SUCCESS')
         return [Success(Action.NONE, node, fp_str, iss_parent_nodes=iss_parent_nodes.copy(), chamber_domain=lattice.get_chamber_domain())]
 
-    fp = BasicMap(fp_str)
-    fd = BasicMap(fd_str)
     pprint('node = {}'.format(set(node) if node else '{}'))
     pprint('fp = {}'.format(fp_str))
     pprint('fd = {}'.format(fd_str))
@@ -290,16 +326,25 @@ def simplify(k=None, fp_str=None, fd_str=None, node=None, lattice=None, legal_la
     node_bset = lattice.create_facet_bset(node)
     current_rank = lattice.compute_rank(lattice.bset)
 
-    vertices = lattice.get_vertices(node)
-    vertices.sort(key=lambda v: multi_aff_to_vec(v, lattice.num_indices, lattice.num_params))
+    all_vertices = lattice.get_vertices(node)
+
+    # prioritze critical vertices first
+    custom_vertices = [CustomMultiAff(v, 0, lattice.num_params) for v in all_vertices]
+    custom_critical_vertices = [CustomMultiAff(v, 0, lattice.num_params) for v in critical_vertices]
+    non_critical_vertices = [cv.multi_aff for cv in custom_vertices if cv not in custom_critical_vertices]
+
+    critical_vertices.sort(key=lambda v: multi_aff_to_vec(v, lattice.num_indices, lattice.num_params))
+    non_critical_vertices.sort(key=lambda v: multi_aff_to_vec(v, lattice.num_indices, lattice.num_params))
+    vertices = critical_vertices + non_critical_vertices
 
     candidate_split_affs_set = set()
     candidate_split_affs = list()
-    x = 0
+
     Fs = [fp, fd]
     if len(iss_parent_nodes) % 2 == 1:
         # switch the order each time, make alternating cuts
         Fs = reversed(Fs)
+
     for f in Fs:
         for vertex in vertices:
             split_affs = lattice.make_hyperplane(RANK - 1, vertex, f)

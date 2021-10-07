@@ -220,8 +220,6 @@ class FaceLattice:
 
         return affs
 
-
-
     def vertex_saturates_constraint(self, vertex, constraint):
         # returns true if vertex saturate the k'th constraint
         v = self.vertex_to_vec(vertex)
