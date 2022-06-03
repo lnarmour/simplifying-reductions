@@ -1,0 +1,7 @@
+graphviz==0.18.2
+islpy==2021.1
+matplotlib==3.5.0
+matplotlib-inline==0.1.3
+networkx==2.6.3
+numpy==1.21.4
+pydot==1.4.2

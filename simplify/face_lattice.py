@@ -2,7 +2,7 @@ from islpy import *
 from enum import Enum
 from itertools import combinations
 import networkx as nx
-from . homothety import *
+import numpy as np
 
 
 class BoundaryLabel(Enum):
@@ -27,13 +27,13 @@ class CustomMultiAff:
 
 def face_lattice_examples():
     S = [
-        # '{ [i,j,k] : 0<=i,j,k and k+j>=i }',
         '[N] -> { [i,j] : N>=5 and 0<=i,j and i+j<=N }',
         '[N,M] -> { [i,j] : N>=5 and 0<=i,j and i+j<=N and j<=M }',
         '[N] -> { [i,j,k] : 0<=i,j and k=0 and i+j<N }',
         '[N] -> { [i,j,k] : 0<=i,j and k=i-15 and i+j<N }'
     ]
     for i, s in enumerate(S):
+        print('-'*80)
         show_face_lattice(s)
 
 
@@ -109,7 +109,7 @@ class FaceLattice:
         maffs = [v.get_expr() for v in self.vertex_nodes[self.chamber][1]]
         vertex_facets = self.vertex_nodes[self.chamber][2]
         maffs = [maff for maff,s in zip(maffs, vertex_facets) if facet.issubset(s)]
-        maffs.sort(key=lambda v: multi_aff_to_vec(v, self.num_indices, self.num_params))
+        maffs.sort(key=lambda v: self.multi_aff_to_vec(v, self.num_indices, self.num_params))
         return maffs
 
     def get_chamber_domain(self):
@@ -552,3 +552,13 @@ class FaceLattice:
             return [aff.get_coefficient_val(dim_type.param, j).to_python() for j in range(num_params)] + [aff.get_constant_val().to_python()]
 
         return [aff_to_vec(multi_aff.get_aff(i), self.num_params) for i in range(self.num_params)]
+
+    def multi_aff_to_vec(self, maff, num_indices, num_params):
+        # given maff: [((A1)N + (B1)M + ... + (C1)), ((A2)N + (B2)M + ... + (C2)), ... ]
+        # return vec: [A1, B1, ..., C1, A2, B2, ..., C2, ... ]
+        vec = []
+        for i in range(num_indices):
+            aff = maff.get_aff(i)
+            vec += [aff.get_coefficient_val(dim_type.param, j) for j in range(num_params)] + [aff.get_constant_val()]
+        return vec
+
